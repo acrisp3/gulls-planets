@@ -58,10 +58,11 @@ LOG10_A_MIN = math.log10(0.3)        # 0.3 AU
 LOG10_A_MAX = math.log10(30.0)       # 30 AU
 
 # Moon bounds
-LOG10_MOON_A_MIN = math.log10(0.001)
-LOG10_MOON_A_MAX = math.log10(0.01)
-LOG10_MOON_MASS_MIN = math.log10(1e-9)
-LOG10_MOON_MASS_MAX = math.log10(1e-5)
+# SMA is relative to planet, range is [0.1 AU, Hill radius]
+LOG10_MOON_A_MIN = math.log10(0.1)  # 0.1 AU minimum (smaller = undetectable)
+# Moon mass: order of our Moon (~3.7e-8 M☉) to Neptune (~5e-5 M☉)
+LOG10_MOON_MASS_MIN = math.log10(1e-8)   # ~3 lunar masses
+LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~3 Neptune masses
 
 # -------------------------------------------------------------------------
 # Orbital element parameters
@@ -71,7 +72,10 @@ ECCENTRICITY_MAX = 0.95
 PERIOD_RATIO_MIN = 1.3
 INCLINATION_BASE = 1000.0
 INCLINATION_SCATTER_SIGMA = 5.0
-MOON_PROBABILITY = 0.1
+
+# Moon parameters
+MOON_PROBABILITY = 0.1          # Probability of moon if planet exists (tunable)
+HOST_STAR_MASS = 1.0            # Host star mass in M☉ (for Hill radius calculation)
 
 # -------------------------------------------------------------------------
 # Run configuration
@@ -233,6 +237,36 @@ def sample_suzuki(rng: np.random.Generator) -> tuple[float, float]:
 
 
 # -------------------------------------------------------------------------
+# Hill radius calculation
+# -------------------------------------------------------------------------
+
+def compute_hill_radius(a_planet: float, e_planet: float, m_planet: float,
+                        m_star: float = HOST_STAR_MASS) -> float:
+    """Compute the Hill radius for a planet.
+    
+    R_H ≈ a(1-e) × (m_planet / (3(m_star + m_planet)))^(1/3)
+    
+    Parameters
+    ----------
+    a_planet : float
+        Planet semi-major axis (AU).
+    e_planet : float
+        Planet eccentricity.
+    m_planet : float
+        Planet mass (M☉).
+    m_star : float
+        Host star mass (M☉).
+    
+    Returns
+    -------
+    float
+        Hill radius in AU.
+    """
+    mass_ratio = m_planet / (3.0 * (m_star + m_planet))
+    return a_planet * (1.0 - e_planet) * (mass_ratio ** (1.0 / 3.0))
+
+
+# -------------------------------------------------------------------------
 # Vectorized sampling functions
 # -------------------------------------------------------------------------
 
@@ -317,15 +351,23 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
                 system[1, :] = [m2, a2, ecc2, inc2, omega2, Omega2, 2]
                 break
     
-    # Possibly add moon (still log-uniform for moons)
-    if rng.random() < MOON_PROBABILITY and n_planets > 0:
-        moon_m = draw_log_uniform_vec(1, LOG10_MOON_MASS_MIN, LOG10_MOON_MASS_MAX, rng)[0]
-        moon_a = draw_log_uniform_vec(1, LOG10_MOON_A_MIN, LOG10_MOON_A_MAX, rng)[0]
-        moon_ecc = draw_eccentricity_vec(1, rng, sigma=0.1)[0]
-        moon_inc = INCLINATION_BASE + rng.normal(0.0, 10.0)
-        moon_omega = 360.0 * rng.random()
-        moon_Omega = 360.0 * rng.random()
-        system[2, :] = [moon_m, moon_a, moon_ecc, moon_inc, moon_omega, moon_Omega, 3]
+    # Possibly add moon around planet 1
+    # Moon SMA is relative to planet, bounded by [0.1 AU, Hill radius]
+    if n_planets > 0 and rng.random() < MOON_PROBABILITY:
+        # Use planet 1's properties for Hill radius
+        r_hill = compute_hill_radius(a1, ecc1, m1)
+        
+        # Only add moon if Hill radius > minimum SMA
+        a_moon_min = 10.0 ** LOG10_MOON_A_MIN  # 0.1 AU
+        if r_hill > a_moon_min:
+            log_a_max = math.log10(r_hill)
+            moon_m = draw_log_uniform_vec(1, LOG10_MOON_MASS_MIN, LOG10_MOON_MASS_MAX, rng)[0]
+            moon_a = draw_log_uniform_vec(1, LOG10_MOON_A_MIN, log_a_max, rng)[0]
+            moon_ecc = draw_eccentricity_vec(1, rng, sigma=0.1)[0]
+            moon_inc = INCLINATION_BASE + rng.normal(0.0, 10.0)
+            moon_omega = 360.0 * rng.random()
+            moon_Omega = 360.0 * rng.random()
+            system[2, :] = [moon_m, moon_a, moon_ecc, moon_inc, moon_omega, moon_Omega, 3]
     
     return system
 
