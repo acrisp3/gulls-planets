@@ -53,18 +53,22 @@ _BASE_DIR = os.path.dirname(__file__)
 GMM_ARTIFACT_PATH: Optional[str] = os.path.join(_BASE_DIR, 'binned_gmm_artifact.pkl')
 _GMM_ARTIFACT = None
 
-try:
-    if GMM_ARTIFACT_PATH and os.path.exists(GMM_ARTIFACT_PATH):
-        # Lazy import to avoid hard dependency when not used
-        from binned_gmm import load_artifact
-        _GMM_ARTIFACT = load_artifact(GMM_ARTIFACT_PATH)
-        print(f"Loaded GMM artifact: {GMM_ARTIFACT_PATH}")
-    else:
-        if GMM_ARTIFACT_PATH:
-            print(f"GMM artifact not found at {GMM_ARTIFACT_PATH}; proceeding without orbital sampling.")
-except Exception as _e:
-    print(f"Warning: failed to load GMM artifact: {_e}. Proceeding without orbital sampling.")
-    _GMM_ARTIFACT = None
+
+def _load_gmm_artifact() -> None:
+    """Load GMM artifact if available. Only called when running as main script."""
+    global _GMM_ARTIFACT
+    try:
+        if GMM_ARTIFACT_PATH and os.path.exists(GMM_ARTIFACT_PATH):
+            # Lazy import to avoid hard dependency when not used
+            from binned_gmm import load_artifact
+            _GMM_ARTIFACT = load_artifact(GMM_ARTIFACT_PATH)
+            print(f"Loaded GMM artifact: {GMM_ARTIFACT_PATH}")
+        else:
+            if GMM_ARTIFACT_PATH:
+                print(f"GMM artifact not found at {GMM_ARTIFACT_PATH}; proceeding without orbital sampling.")
+    except Exception as _e:
+        print(f"Warning: failed to load GMM artifact: {_e}. Proceeding without orbital sampling.")
+        _GMM_ARTIFACT = None
 
 # -------------------------------------------------------------------------
 # Suzuki et al. (2016) broken power-law parameters (All sample, q_br fixed)
@@ -370,6 +374,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _load_gmm_artifact()
     start = time.time()
     main()
     end = time.time()
