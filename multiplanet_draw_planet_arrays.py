@@ -68,8 +68,8 @@ HOST_STAR_MASS = 0.5            # Host star mass in M☉ (tunable)
 # -------------------------------------------------------------------------
 # Orbital element parameters
 # -------------------------------------------------------------------------
-ECCENTRICITY_SIGMA = 0.3
-ECCENTRICITY_MAX = 0.95
+ECCENTRICITY_SIGMA = 1.0
+ECCENTRICITY_MAX = 1.0
 PERIOD_RATIO_MIN = 1.3
 
 # -------------------------------------------------------------------------
@@ -91,6 +91,7 @@ file_ext = ''
 nl = 1000       # systems per file (reduced for testing)
 nf = 1          # files per field
 overwrite_existing = True
+ALLOW_ZERO_PLANETS = False  # If False, resample until each system has >=1 planet
 
 HEADER_LINE = 'Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType'
 DELIMITER = ' '
@@ -328,6 +329,7 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
         - 0 planets: both slots empty (OrbitType=1 as placeholder)
         - 1 planet: first slot = planet, second slot = moon (with prob) or empty
         - 2 planets: first slot = planet1, second slot = planet2 (no moon)
+        - If ALLOW_ZERO_PLANETS is False, 0-planet draws are rejected and resampled.
     
     Parameters
     ----------
@@ -351,8 +353,12 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
     system[10] = INC_PLACEHOLDER  # Object 2 Inclination
     system[13] = 1                # Object 2 OrbitType
     
-    # Draw planet count from Poisson, cap at 2
-    n_planets = min(rng.poisson(expected_planets), 2)
+    # Draw planet count from Poisson, cap at 2 (optionally reject 0-planet draws)
+    while True:
+        n_planets = min(rng.poisson(expected_planets), 2)
+        if n_planets == 0 and not ALLOW_ZERO_PLANETS:
+            continue
+        break
     
     if n_planets == 0:
         return system
@@ -531,12 +537,8 @@ def main() -> None:
     field_ids = get_field_numbers(src_path)
     print(f"\nLoaded {len(field_ids)} fields in {time.perf_counter()-t_fields:.3f}s")
     
-    # Limit fields for testing
-    max_fields = 5  # Only process 5 fields for benchmarking
-    field_ids = field_ids[:max_fields]
     tasks = [(field, i) for field in field_ids for i in range(nf)]
-    
-    print(f"Processing {len(tasks)} tasks (limited to {max_fields} fields for testing)")
+    print(f"Processing {len(tasks)} tasks across all fields")
     
     # Single-threaded for clear benchmarking
     print(f"\n--- Running single-threaded for clear timing ---")
