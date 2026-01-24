@@ -1,20 +1,21 @@
 """Generate multiplanet system arrays for GULLS General lightcurve generator.
 
 This script produces planet files in the new format required by GULLS 3.0.0:
-    Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType
+    Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType (x2)
 
-Each system consists of 3 rows:
-    - OrbitType 1: planet 1
-    - OrbitType 2: planet 2  
-    - OrbitType 3: moon
-Objects with mass=0 indicate no planet/moon in that slot.
+Each row is ONE system with 14 columns (2 objects × 7 parameters):
+    - Columns 1-7: First object (always a planet, OrbitType=1)
+    - Columns 8-14: Second object (either planet OrbitType=1, or moon OrbitType=3)
+A system can have a second planet OR a moon, but not both.
+Objects with mass=0 indicate no object in that slot (OrbitType=1 as placeholder).
 
 Planet properties (mass, semi-major axis) are drawn FROM the Suzuki et al. (2016)
 mass ratio function:
     d²N_pl / (d log q d log s) = A × (q/q_br)^n × s^m
 
-The total expected planets per star is computed by integrating this over the
-(q, s) bounds. Planet count is drawn from Poisson, capped at 2 (simulation limit).
+Mass is converted from mass ratio q via: m = q × HOST_STAR_MASS
+The total expected planets per star is computed by integrating over the (q, s) bounds.
+Planet count is drawn from Poisson, capped at 2.
 """
 
 from __future__ import annotations
@@ -57,12 +58,12 @@ LOG10_MASS_MAX = math.log10(3e-2)    # ~10000 Earth masses
 LOG10_A_MIN = math.log10(0.3)        # 0.3 AU
 LOG10_A_MAX = math.log10(30.0)       # 30 AU
 
-# Moon bounds
-# SMA is relative to planet, range is [0.1 AU, Hill radius]
-LOG10_MOON_A_MIN = math.log10(0.1)  # 0.1 AU minimum (smaller = undetectable)
-# Moon mass: order of our Moon (~3.7e-8 M☉) to Neptune (~5e-5 M☉)
-LOG10_MOON_MASS_MIN = math.log10(1e-8)   # ~3 lunar masses
-LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~3 Neptune masses
+# -------------------------------------------------------------------------
+# Host star mass for q ↔ m conversion
+# -------------------------------------------------------------------------
+# Mass ratio q = m_planet / m_star, so m_planet = q × HOST_STAR_MASS
+# Setting this to 0.5 effectively doubles the mass ratio for a given planet mass
+HOST_STAR_MASS = 0.5            # Host star mass in M☉ (tunable)
 
 # -------------------------------------------------------------------------
 # Orbital element parameters
@@ -70,12 +71,16 @@ LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~3 Neptune masses
 ECCENTRICITY_SIGMA = 0.3
 ECCENTRICITY_MAX = 0.95
 PERIOD_RATIO_MIN = 1.3
-INCLINATION_BASE = 1000.0
-INCLINATION_SCATTER_SIGMA = 5.0
 
+# -------------------------------------------------------------------------
 # Moon parameters
-MOON_PROBABILITY = 0.1          # Probability of moon if planet exists (tunable)
-HOST_STAR_MASS = 1.0            # Host star mass in M☉ (for Hill radius calculation)
+# -------------------------------------------------------------------------
+MOON_PROBABILITY = 1.0          # Probability of moon if only 1 planet (tunable)
+MOON_HILL_FRACTION = 0.2        # Moon SMA upper limit as fraction of Hill radius (tunable)
+LOG10_MOON_A_MIN = math.log10(0.05)  # 0.05 AU minimum SMA (tunable)
+# Moon mass: order of our Moon (~3.7e-8 M☉) to Neptune (~5e-5 M☉)
+LOG10_MOON_MASS_MIN = math.log10(1e-8)   # ~3 lunar masses
+LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~3 Neptune masses
 
 # -------------------------------------------------------------------------
 # Run configuration
@@ -87,7 +92,7 @@ nl = 1000       # systems per file (reduced for testing)
 nf = 1          # files per field
 overwrite_existing = True
 
-HEADER_LINE = 'Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType'
+HEADER_LINE = 'Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType'
 DELIMITER = ' '
 
 FIXED_BASE_SEED: int | None = 42  # Set for reproducibility during testing
@@ -303,11 +308,26 @@ def check_period_ratio(a1: float, a2: float) -> bool:
 # System generation
 # -------------------------------------------------------------------------
 
-def generate_system(rng: np.random.Generator, expected_planets: float) -> np.ndarray:
-    """Generate a single planetary system (3 rows).
+def q_to_mass(log_q: float) -> float:
+    """Convert mass ratio q to planet mass using HOST_STAR_MASS.
     
-    Draws planet count from Poisson(expected_planets), then samples each
-    planet's (m, a) from the Suzuki distribution.
+    m_planet = q × HOST_STAR_MASS
+    """
+    q = 10.0 ** log_q
+    return q * HOST_STAR_MASS
+
+
+def generate_system(rng: np.random.Generator, expected_planets: float) -> np.ndarray:
+    """Generate a single planetary system (1 row, 14 columns).
+    
+    Each row has 2 objects (7 columns each):
+        - Object 1 (cols 0-6): planet (OrbitType=1) or empty
+        - Object 2 (cols 7-13): planet (OrbitType=1) or moon (OrbitType=3) or empty
+    
+    Logic:
+        - 0 planets: both slots empty (OrbitType=1 as placeholder)
+        - 1 planet: first slot = planet, second slot = moon (with prob) or empty
+        - 2 planets: first slot = planet1, second slot = planet2 (no moon)
     
     Parameters
     ----------
@@ -315,11 +335,21 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
         Random number generator.
     expected_planets : float
         Expected planets per star from integrated Suzuki.
+    
+    Returns
+    -------
+    np.ndarray
+        Shape (14,) with [obj1_params..., obj2_params...]
     """
-    system = np.zeros((3, 7), dtype=float)
-    system[0, 6] = 1  # OrbitType
-    system[1, 6] = 2
-    system[2, 6] = 3
+    # Fixed inclination placeholder (downstream simulator will handle it)
+    INC_PLACEHOLDER = 1000.0
+    
+    # Initialize: zeros for most, but set OrbitType=1 and Inclination=1000
+    system = np.zeros(14, dtype=float)
+    system[3] = INC_PLACEHOLDER   # Object 1 Inclination
+    system[6] = 1                 # Object 1 OrbitType
+    system[10] = INC_PLACEHOLDER  # Object 2 Inclination
+    system[13] = 1                # Object 2 OrbitType
     
     # Draw planet count from Poisson, cap at 2
     n_planets = min(rng.poisson(expected_planets), 2)
@@ -327,47 +357,53 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
     if n_planets == 0:
         return system
     
-    # Planet 1: sample from Suzuki
-    log_m1, log_a1 = sample_suzuki(rng)
-    m1 = 10.0 ** log_m1
+    # Planet 1: sample (q, s) from Suzuki, convert q to mass
+    log_q1, log_a1 = sample_suzuki(rng)
+    m1 = q_to_mass(log_q1)
     a1 = 10.0 ** log_a1
     ecc1 = draw_eccentricity_vec(1, rng)[0]
-    inc1 = INCLINATION_BASE + rng.normal(0.0, INCLINATION_SCATTER_SIGMA)
     omega1 = 360.0 * rng.random()
     Omega1 = 360.0 * rng.random()
-    system[0, :] = [m1, a1, ecc1, inc1, omega1, Omega1, 1]
+    system[0:7] = [m1, a1, ecc1, INC_PLACEHOLDER, omega1, Omega1, 1]
     
     if n_planets >= 2:
         # Draw second planet from Suzuki, ensuring period ratio constraint
         for _ in range(50):  # Max attempts
-            log_m2, log_a2 = sample_suzuki(rng)
+            log_q2, log_a2 = sample_suzuki(rng)
             a2 = 10.0 ** log_a2
             if check_period_ratio(a1, a2):
-                m2 = 10.0 ** log_m2
+                m2 = q_to_mass(log_q2)
                 ecc2 = draw_eccentricity_vec(1, rng)[0]
-                inc2 = INCLINATION_BASE + rng.normal(0.0, INCLINATION_SCATTER_SIGMA)
                 omega2 = 360.0 * rng.random()
                 Omega2 = 360.0 * rng.random()
-                system[1, :] = [m2, a2, ecc2, inc2, omega2, Omega2, 2]
+                system[7:14] = [m2, a2, ecc2, INC_PLACEHOLDER, omega2, Omega2, 1]
                 break
+        # No moon possible when we have 2 planets
+        return system
     
-    # Possibly add moon around planet 1
-    # Moon SMA is relative to planet, bounded by [0.1 AU, Hill radius]
-    if n_planets > 0 and rng.random() < MOON_PROBABILITY:
-        # Use planet 1's properties for Hill radius
+    # n_planets == 1: possibly add moon in second slot
+    if rng.random() < MOON_PROBABILITY:
+        # Compute Hill radius for planet 1
         r_hill = compute_hill_radius(a1, ecc1, m1)
         
-        # Only add moon if Hill radius > minimum SMA
-        a_moon_min = 10.0 ** LOG10_MOON_A_MIN  # 0.1 AU
-        if r_hill > a_moon_min:
-            log_a_max = math.log10(r_hill)
-            moon_m = draw_log_uniform_vec(1, LOG10_MOON_MASS_MIN, LOG10_MOON_MASS_MAX, rng)[0]
-            moon_a = draw_log_uniform_vec(1, LOG10_MOON_A_MIN, log_a_max, rng)[0]
-            moon_ecc = draw_eccentricity_vec(1, rng, sigma=0.1)[0]
-            moon_inc = INCLINATION_BASE + rng.normal(0.0, 10.0)
-            moon_omega = 360.0 * rng.random()
-            moon_Omega = 360.0 * rng.random()
-            system[2, :] = [moon_m, moon_a, moon_ecc, moon_inc, moon_omega, moon_Omega, 3]
+        # Moon SMA upper limit is MOON_HILL_FRACTION × Hill radius
+        a_moon_max = MOON_HILL_FRACTION * r_hill
+        a_moon_min = 10.0 ** LOG10_MOON_A_MIN
+        
+        # Only add moon if there's valid SMA range
+        if a_moon_max > a_moon_min:
+            log_a_max = math.log10(a_moon_max)
+            
+            # Try to draw valid moon (mass < host planet)
+            for _ in range(10):  # Max attempts
+                moon_m = draw_log_uniform_vec(1, LOG10_MOON_MASS_MIN, LOG10_MOON_MASS_MAX, rng)[0]
+                if moon_m < m1:  # Moon must be less massive than host planet
+                    moon_a = draw_log_uniform_vec(1, LOG10_MOON_A_MIN, log_a_max, rng)[0]
+                    moon_ecc = draw_eccentricity_vec(1, rng, sigma=0.1)[0]
+                    moon_omega = 360.0 * rng.random()
+                    moon_Omega = 360.0 * rng.random()
+                    system[7:14] = [moon_m, moon_a, moon_ecc, INC_PLACEHOLDER, moon_omega, moon_Omega, 3]
+                    break
     
     return system
 
@@ -375,7 +411,13 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
 def generate_systems_batch(n_systems: int, rng: np.random.Generator,
                            expected_planets: float,
                            benchmark: bool = False) -> np.ndarray:
-    """Generate multiple systems with optional benchmarking."""
+    """Generate multiple systems with optional benchmarking.
+    
+    Returns
+    -------
+    np.ndarray
+        Shape (n_systems, 14) - each row is one system with 2 objects.
+    """
     t0 = time.perf_counter()
     
     systems = []
@@ -388,7 +430,8 @@ def generate_systems_batch(n_systems: int, rng: np.random.Generator,
             rate = (i + 1) / elapsed
             print(f"  {i+1}/{n_systems} systems ({rate:.1f}/sec)")
     
-    combined = np.vstack(systems)
+    # Stack 1D arrays into (n_systems, 14) array
+    combined = np.array(systems)
     
     if benchmark:
         elapsed = time.perf_counter() - t0
@@ -432,7 +475,9 @@ def worker(task: tuple[int, int], expected_planets: float) -> dict:
     if file_ext == '.npy':
         np.save(pfile, combined)
     else:
-        fmt = ['%.6e', '%.6e', '%.6f', '%.4f', '%.4f', '%.4f', '%d']
+        # 14 columns: 2 objects × 7 params each
+        fmt_obj = ['%.6e', '%.6e', '%.6f', '%.4f', '%.4f', '%.4f', '%d']
+        fmt = fmt_obj + fmt_obj  # Repeat for both objects
         np.savetxt(pfile, combined, delimiter=DELIMITER, header=HEADER_LINE, 
                    comments='', fmt=fmt)
     timings['write'] = time.perf_counter() - t_write
