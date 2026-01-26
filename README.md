@@ -4,6 +4,27 @@ This repository provides sampling scripts for generating synthetic planet (and l
 
 Distributions implemented:
 
+* `multiplanet_draw_planet_arrays.py` – **Multiplanet System Generator (Suzuki et al. 2016 sampling)**:
+	- **Warning:** This script is not intended for statistically sound population simulations. It is designed to test multi-object lightcurve generators in a variety of circumstances, not to model real planetary system statistics.
+	- Generates synthetic multiplanet systems for use with the GULLS 3.0.0 lightcurve generator, producing files where each row represents a system with up to two planets or a planet+moon configuration.
+	- **Sampling method:**
+		- Planet properties (mass, semi-major axis) are drawn from the Suzuki et al. (2016) broken power-law mass ratio function:
+		  $$ \frac{d^2N_{pl}}{d\log q\,d\log s} = A \left(\frac{q}{q_{br}}\right)^n s^m $$
+		- Mass is converted from mass ratio $q$ via $m = q \times M_{\star}$, with $M_{\star}$ configurable (default 0.5 $M_\odot$).
+		- The number of planets per system is drawn from a Poisson distribution (mean from the integrated Suzuki function), capped at 2.
+		- If only one planet is drawn, a moon may be added with a configurable probability, with its semi-major axis limited by a fraction of the host planet's Hill radius.
+		- Orbital elements (eccentricity, inclination, longitudes) are drawn from specified distributions (e.g., half-Gaussian for eccentricity, fixed inclination placeholder for GULLS binary convention).
+	- **Parameters:**
+		- All key parameters (mass/semi-major axis bounds, exponents, moon probability, etc.) are configurable near the top of the script.
+		- Deterministic runs are supported via a fixed base seed.
+	- **Output:**
+		- Files are written under `planets/<run_name>/` as `<run_name>.planets.<field_number>.<file_index>`.
+		- Each row has 14 columns: [planet1 (7 params), planet2 or moon (7 params)].
+		- Columns: Mass, SemimajorAxis, Eccentricity, Inclination, LongitudePerihelion, LongitudeAscNode, OrbitType (1=planet, 3=moon).
+		- Objects with mass=0 indicate an empty slot.
+		- Output format is compatible with GULLS 3.0.0.
+
+
 * `sumi2023_draw_planet_arrays.py` – **Composite Sumi-style mass function**: a *sum* of two independent power-law segments in base-10 logarithmic mass space:
 	- Planet (free-floating / wide orbit) component:
 		\( \frac{dN}{d\log_{10} M} = Z_{\rm planet} \,( M / M_{\rm pivot,planet} )^{-\alpha_4} \)
@@ -159,3 +180,17 @@ Example uniform output header:
 ---
 
 For questions or issues, please contact the script author.
+
+---
+
+### Multiplanet Generator Example Output
+
+Example output header (text mode):
+
+```
+Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType
+```
+
+Each row: [planet1 (7 params), planet2 or moon (7 params)]
+
+---
