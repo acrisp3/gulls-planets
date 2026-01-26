@@ -42,21 +42,21 @@ _BASE_DIR = os.path.dirname(__file__)
 SUZUKI_A = 0.61             # planets/star/dex² at (q_br, s=1)
 SUZUKI_Q_BREAK = 1.7e-4     # mass-ratio break (~20 Earth masses for 0.6 Msun host)
 SUZUKI_N = -0.93            # slope for q >= q_break (giant planets)
-SUZUKI_P = 0.6              # slope for q < q_break (Neptunes/super-Earths)
-SUZUKI_M = 0.49             # separation exponent (roughly log-flat)
+SUZUKI_P = 0.0              # slope for q < q_break (Neptunes/super-Earths), default 0.6
+SUZUKI_M = 0.0              # separation exponent (roughly log-uniform), default 0.49
 
 LOG10_Q_BREAK = math.log10(SUZUKI_Q_BREAK)
 
 # Precomputed total expected planets per star (computed at module load)
-_TOTAL_EXPECTED_PLANETS: float | None = None
-
+TOTAL_EXPECTED_PLANETS: float | None = None # you can replace this with a number to renormalize the suzuki distribution but the numbers don't come out quite right, so I wouldn't trust it.
+                                            # default is ~1.81 depending on your bounds
 # -------------------------------------------------------------------------
 # Sampling bounds
 # -------------------------------------------------------------------------
 LOG10_MASS_MIN = math.log10(1e-7)    # ~0.03 Earth masses
 LOG10_MASS_MAX = math.log10(3e-2)    # ~10000 Earth masses
-LOG10_A_MIN = math.log10(0.3)        # 0.3 AU
-LOG10_A_MAX = math.log10(30.0)       # 30 AU
+LOG10_A_MIN = math.log10(0.3)        # default 0.3 AU
+LOG10_A_MAX = math.log10(30.0)       # default 30 AU
 
 # -------------------------------------------------------------------------
 # Host star mass for q ↔ m conversion
@@ -64,23 +64,25 @@ LOG10_A_MAX = math.log10(30.0)       # 30 AU
 # Mass ratio q = m_planet / m_star, so m_planet = q × HOST_STAR_MASS
 # Setting this to 0.5 effectively doubles the mass ratio for a given planet mass
 HOST_STAR_MASS = 0.5            # Host star mass in M☉ (tunable)
+log10_q_min = LOG10_MASS_MIN - math.log10(HOST_STAR_MASS)
+log10_q_max = LOG10_MASS_MAX - math.log10(HOST_STAR_MASS)
 
 # -------------------------------------------------------------------------
 # Orbital element parameters
 # -------------------------------------------------------------------------
 ECCENTRICITY_SIGMA = 1.0
-ECCENTRICITY_MAX = 1.0
+ECCENTRICITY_MAX = 0.9
 PERIOD_RATIO_MIN = 1.3
 
 # -------------------------------------------------------------------------
 # Moon parameters
 # -------------------------------------------------------------------------
 MOON_PROBABILITY = 1.0          # Probability of moon if only 1 planet (tunable)
-MOON_HILL_FRACTION = 0.2        # Moon SMA upper limit as fraction of Hill radius (tunable)
-LOG10_MOON_A_MIN = math.log10(0.05)  # 0.05 AU minimum SMA (tunable)
+MOON_HILL_FRACTION = 0.1        # Moon SMA upper limit as fraction of Hill radius (tunable)
+LOG10_MOON_A_MIN = math.log10(0.005)  # 0.005 AU minimum SMA (tunable)
 # Moon mass: order of our Moon (~3.7e-8 M☉) to Neptune (~5e-5 M☉)
-LOG10_MOON_MASS_MIN = math.log10(1e-8)   # ~3 lunar masses
-LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~3 Neptune masses
+LOG10_MOON_MASS_MIN = math.log10(1e-8)   # ~1/4 lunar masses
+LOG10_MOON_MASS_MAX = math.log10(1e-4)   # ~2 Neptune masses
 
 # -------------------------------------------------------------------------
 # Run configuration
@@ -140,8 +142,8 @@ def compute_total_expected_planets() -> float:
     
     # Integral over log q: broken power law
     # Need to split at q_br
-    log_q_min = LOG10_MASS_MIN
-    log_q_max = LOG10_MASS_MAX
+    log_q_min = LOG10_MASS_MIN - math.log10(HOST_STAR_MASS)
+    log_q_max = LOG10_MASS_MAX - math.log10(HOST_STAR_MASS)
     
     I_q = 0.0
     if log_q_min < LOG10_Q_BREAK:
@@ -177,8 +179,8 @@ def sample_log_s(rng: np.random.Generator) -> float:
 
 def sample_log_q(rng: np.random.Generator) -> float:
     """Sample log10(q) from the Suzuki broken power law distribution."""
-    log_q_min = LOG10_MASS_MIN
-    log_q_max = LOG10_MASS_MAX
+    log_q_min = LOG10_MASS_MIN - math.log10(HOST_STAR_MASS)
+    log_q_max = LOG10_MASS_MAX - math.log10(HOST_STAR_MASS)
     
     # Compute probability mass in each region
     I_low = 0.0
@@ -388,7 +390,8 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
         return system
     
     # n_planets == 1: possibly add moon in second slot
-    if rng.random() < MOON_PROBABILITY:
+    draw = rng.random()
+    if draw < MOON_PROBABILITY:
         # Compute Hill radius for planet 1
         r_hill = compute_hill_radius(a1, ecc1, m1)
         
@@ -502,7 +505,10 @@ def main() -> None:
         print(f"Deterministic run with base seed {FIXED_BASE_SEED}")
     
     # Compute total expected planets per star
+    global TOTAL_EXPECTED_PLANETS
     expected_planets = compute_total_expected_planets()
+    if TOTAL_EXPECTED_PLANETS is None:
+        TOTAL_EXPECTED_PLANETS = expected_planets
     
     print(f"\nSuzuki parameters:")
     print(f"  A = {SUZUKI_A} (normalization)")
@@ -513,9 +519,10 @@ def main() -> None:
     
     print(f"\nBounds:")
     print(f"  Mass: [{10**LOG10_MASS_MIN:.2e}, {10**LOG10_MASS_MAX:.2e}] M☉")
+    print(f"  (Mass ratio q: [{10**log10_q_min:.2e}, {10**log10_q_max:.2e}])")
     print(f"  Semi-major axis: [{10**LOG10_A_MIN:.2f}, {10**LOG10_A_MAX:.2f}] AU")
     
-    print(f"\n*** Expected planets per star: {expected_planets:.3f} ***")
+    print(f"\n*** Expected planets per star: {TOTAL_EXPECTED_PLANETS:.3f} ***")
     
     print(f"\nConfiguration:")
     print(f"  Systems per file: {nl}")
@@ -547,7 +554,7 @@ def main() -> None:
     
     for i, task in enumerate(tasks):
         print(f"\nTask {i+1}/{len(tasks)}: field={task[0]}, index={task[1]}")
-        timings = worker(task, expected_planets)
+        timings = worker(task, TOTAL_EXPECTED_PLANETS)
         all_timings.append(timings)
         print(f"  RNG setup: {timings.get('rng_setup', 0)*1000:.1f}ms")
         print(f"  Generation: {timings.get('generation', 0):.2f}s")
