@@ -15,7 +15,7 @@ mass ratio function:
 
 Mass is converted from mass ratio q via: m = q × HOST_STAR_MASS
 The total expected planets per star is computed by integrating over the (q, s) bounds.
-Planet count is drawn from Poisson, capped at 2.
+Planet count is drawn from Poisson, capped by `MAX_PLANETS` (configurable, default 2).
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import time
 from typing import Optional
 
 import numpy as np
+import argparse
 
 # Resolve paths relative to this script
 _BASE_DIR = os.path.dirname(__file__)
@@ -94,6 +95,36 @@ nl = 1000       # systems per file (reduced for testing)
 nf = 1          # files per field
 overwrite_existing = True
 ALLOW_ZERO_PLANETS = False  # If False, resample until each system has >=1 planet
+
+# Maximum number of planets to allow per system (capped). Set to 1 to
+# prevent any 2-planet systems and allow single-planet + moon systems.
+MAX_PLANETS = 2
+
+
+def parse_cli_args() -> argparse.Namespace:
+    """Parse command-line arguments and return the namespace."""
+    p = argparse.ArgumentParser(description='Generate multiplanet system arrays (Suzuki sampling)')
+    p.add_argument('--max-planets', type=int, default=MAX_PLANETS,
+                   help='Maximum number of planets allowed per system (default: %(default)s)')
+    p.add_argument('--moon-probability', type=float, default=MOON_PROBABILITY,
+                   help='Probability of adding a moon to a single-planet system (default: %(default)s)')
+    p.add_argument('--allow-zero-planets', action='store_true', default=ALLOW_ZERO_PLANETS,
+                   help='Allow systems with zero planets (default: %(default)s)')
+    p.add_argument('--systems-per-file', '-n', type=int, default=nl,
+                   help='Number of systems per output file (default: %(default)s)')
+    p.add_argument('--files-per-field', type=int, default=nf,
+                   help='Number of files to produce per field (default: %(default)s)')
+    p.add_argument('--seed', type=int, default=None,
+                   help='Base RNG seed for reproducible runs (overrides file default)')
+    p.add_argument('--total-expected-planets', type=float, default=None,
+                   help='Override computed TOTAL_EXPECTED_PLANETS (default: compute from Suzuki)')
+    p.add_argument('--rundes', type=str, default=rundes,
+                   help='Run identifier used in output filenames')
+    p.add_argument('--sources-file', type=str, default=sources_file,
+                   help='Path to sources file listing fields')
+    p.add_argument('--no-overwrite', action='store_true', default=not overwrite_existing,
+                   help='Do not overwrite existing files (default: overwrite)')
+    return p.parse_args()
 
 HEADER_LINE = 'Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType Mass SemimajorAxis Eccentricity Inclination LongitudePerihelion LongitudeAscNode OrbitType'
 DELIMITER = ' '
@@ -355,9 +386,9 @@ def generate_system(rng: np.random.Generator, expected_planets: float) -> np.nda
     system[10] = INC_PLACEHOLDER  # Object 2 Inclination
     system[13] = 1                # Object 2 OrbitType
     
-    # Draw planet count from Poisson, cap at 2 (optionally reject 0-planet draws)
+    # Draw planet count from Poisson, cap at MAX_PLANETS (optionally reject 0-planet draws)
     while True:
-        n_planets = min(rng.poisson(expected_planets), 2)
+        n_planets = min(rng.poisson(expected_planets), MAX_PLANETS)
         if n_planets == 0 and not ALLOW_ZERO_PLANETS:
             continue
         break
@@ -501,11 +532,28 @@ def main() -> None:
     print("MULTIPLANET GENERATOR - SUZUKI SAMPLING")
     print("=" * 60)
     
+    # Parse CLI args and override globals where requested
+    args = parse_cli_args()
+
+    # Apply CLI overrides to module-level config
+    global MAX_PLANETS, MOON_PROBABILITY, ALLOW_ZERO_PLANETS, nl, nf, FIXED_BASE_SEED, TOTAL_EXPECTED_PLANETS, rundes, sources_file, overwrite_existing
+    MAX_PLANETS = args.max_planets
+    MOON_PROBABILITY = args.moon_probability
+    ALLOW_ZERO_PLANETS = args.allow_zero_planets
+    nl = args.systems_per_file
+    nf = args.files_per_field
+    if args.seed is not None:
+        FIXED_BASE_SEED = args.seed
+    if args.total_expected_planets is not None:
+        TOTAL_EXPECTED_PLANETS = args.total_expected_planets
+    rundes = args.rundes
+    sources_file = args.sources_file
+    overwrite_existing = not args.no_overwrite
+
     if FIXED_BASE_SEED is not None:
         print(f"Deterministic run with base seed {FIXED_BASE_SEED}")
     
     # Compute total expected planets per star
-    global TOTAL_EXPECTED_PLANETS
     expected_planets = compute_total_expected_planets()
     if TOTAL_EXPECTED_PLANETS is None:
         TOTAL_EXPECTED_PLANETS = expected_planets

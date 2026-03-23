@@ -100,6 +100,43 @@ Generates deterministic mass/semi-major-axis grids with randomized inclination a
 python sensmap_draw_planet_arrays.py
 ```
 
+### Multiplanet generator (CLI)
+
+The `multiplanet_draw_planet_arrays.py` script now supports a small CLI for runtime configuration. Run `--help` to see all options:
+
+```bash
+python multiplanet_draw_planet_arrays.py --help
+```
+
+Common flags:
+
+- `--max-planets` : Maximum planets allowed per system (default 2). Set to `1` to produce only single-planet systems (allowing moons via `--moon-probability`).
+- `--moon-probability` : Probability to add a moon to a single-planet system (0.0–1.0).
+- `--allow-zero-planets` : Permit systems with zero planets (otherwise resampled).
+- `--systems-per-file, -n` : Number of systems per output file.
+- `--files-per-field` : Number of files to produce per field.
+- `--seed` : Base RNG seed for reproducible runs (overrides `FIXED_BASE_SEED`).
+- `--total-expected-planets` : Override computed expected planets per star (useful for testing).
+- `--rundes` : Run identifier used in output filenames.
+- `--sources-file` : Path to the sources file listing fields.
+- `--no-overwrite` : Do not overwrite existing files.
+
+Examples:
+
+Single-planet systems with moons (every single-planet gets a moon when allowed):
+
+```bash
+python multiplanet_draw_planet_arrays.py --max-planets 1 --moon-probability 1.0
+```
+
+Mix of single- and two-planet systems (no moons):
+
+```bash
+python multiplanet_draw_planet_arrays.py --max-planets 2 --moon-probability 0.0 --total-expected-planets 2.0
+```
+
+These flags override the in-script defaults and allow quick experimentation without editing the source.
+
 To run the original Perl implementation (now reading the same sources file and allowing overrides), use:
 
 ```bash
